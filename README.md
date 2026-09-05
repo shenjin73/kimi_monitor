@@ -2,6 +2,8 @@
 
 macOS 原生 app，实时监控本机所有 Kimi Code CLI 会话的工作状态，同时展示套餐用量和系统资源。主窗口 + 菜单栏图标，面板化设计，方便扩展。
 
+![KimiMonitor 截图](screenshot.png)
+
 ## 界面
 
 单页仪表盘（无侧栏，窗口可自由缩放），从上到下三个 section：
