@@ -99,10 +99,18 @@ final class QuotaMonitor: ObservableObject {
         if let ei = refreshed.expires_in { creds.expires_at = Date().timeIntervalSince1970 + ei }
 
         // Atomic write-back (tmp + rename) so the CLI never sees a partial file.
+        // Use POSIX rename(2): unlike FileManager.moveItem it atomically
+        // replaces an existing destination.
         let out = try JSONEncoder().encode(creds)
         let tmp = credentialsPath + ".tmp-monitor"
         try out.write(to: URL(fileURLWithPath: tmp))
-        try FileManager.default.moveItem(atPath: tmp, toPath: credentialsPath)
+        // Keep the credentials file private (the original is mode 600).
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tmp)
+        if rename(tmp, credentialsPath) != 0 {
+            try? FileManager.default.removeItem(atPath: tmp)
+            throw NSError(domain: "QuotaMonitor", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "写回 credentials 失败 (rename errno \(errno))"])
+        }
         return creds.access_token
     }
 
