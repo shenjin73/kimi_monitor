@@ -5,18 +5,31 @@ import IOKit
 final class SystemMonitor: ObservableObject {
     static let shared = SystemMonitor()
 
+    /// A top-N process row shown inside a gauge tile.
+    struct ProcessUsage: Identifiable {
+        var id: Int { pid }
+        let pid: Int
+        let name: String
+        let value: String // preformatted, e.g. "87.3%" / "4.2 GB"
+    }
+
     struct Snapshot {
         var cpuUsage: Double = 0      // 0...1
         var gpuUsage: Double? = nil   // 0...1, nil if unavailable
         var memoryUsedGB: Double = 0
         var memoryTotalGB: Double = 0
         var memoryUsedFraction: Double = 0
+        var cpuTop: [ProcessUsage] = []
+        var memoryTop: [ProcessUsage] = []
+        var gpuTop: [ProcessUsage] = []
     }
 
     @Published private(set) var snapshot = Snapshot()
 
     private var timer: Timer?
     private var previousCPUTicks: (user: UInt64, system: UInt64, idle: UInt64, nice: UInt64)?
+    private var previousGPUTimes: [Int32: UInt64]?
+    private var previousGPUTimesAt: Date?
 
     private init() {}
 
@@ -36,7 +49,176 @@ final class SystemMonitor: ObservableObject {
         s.memoryUsedGB = used
         s.memoryTotalGB = total
         s.memoryUsedFraction = total > 0 ? used / total : 0
+        s.cpuTop = topCPUProcesses()
+        s.memoryTop = topMemoryProcesses()
+        s.gpuTop = topGPUProcesses(systemGpuFraction: s.gpuUsage)
         snapshot = s
+    }
+
+    // MARK: - Top processes (via ps, sorted by ps itself)
+
+    /// `ps -Aco pid=,<metric>=,comm= <sortFlag>`; -r sorts by CPU, -m by memory.
+    private func topCPUProcesses() -> [ProcessUsage] {
+        parsePS(arguments: ["-Aco", "pid=,pcpu=,comm=", "-r"]) { pid, metric, name in
+            ProcessUsage(pid: pid, name: name,
+                         value: String(format: "%.1f%%", Double(metric) ?? 0))
+        }
+    }
+
+    private func topMemoryProcesses() -> [ProcessUsage] {
+        parsePS(arguments: ["-Aco", "pid=,rss=,comm=", "-m"]) { pid, metric, name in
+            let mb = (Double(metric) ?? 0) / 1024
+            let text = mb >= 1024 ? String(format: "%.1f GB", mb / 1024)
+                                  : String(format: "%.0f MB", mb)
+            return ProcessUsage(pid: pid, name: name, value: text)
+        }
+    }
+
+    // MARK: - Top GPU processes (IORegistry AGXDeviceUserClient)
+
+    /// Per-process GPU usage: each process using the GPU has an
+    /// AGXDeviceUserClient node under AGXAccelerator with an accumulated GPU
+    /// time (nanoseconds). Diff between samples, then normalize so the shares
+    /// sum to the system-wide GPU utilization (same approach as mactop).
+    private func topGPUProcesses(systemGpuFraction: Double?) -> [ProcessUsage] {
+        guard let sys = systemGpuFraction, sys > 0 else {
+            // Keep the baseline fresh even when idle so the next busy sample
+            // has a reference point.
+            previousGPUTimes = gpuProcessTimes()
+            previousGPUTimesAt = Date()
+            return []
+        }
+        let now = Date()
+        let current = gpuProcessTimes()
+        defer {
+            previousGPUTimes = current
+            previousGPUTimesAt = now
+        }
+        guard let prev = previousGPUTimes, let prevAt = previousGPUTimesAt else { return [] }
+        let elapsed = now.timeIntervalSince(prevAt)
+        guard elapsed > 0 else { return [] }
+
+        var perPid: [(pid: Int32, msPerSec: Double)] = []
+        var totalMs = 0.0
+        for (pid, cur) in current {
+            guard let old = prev[pid], cur >= old else { continue }
+            let ms = Double(cur - old) / elapsed / 1_000_000
+            if ms > 0.1 { perPid.append((pid, ms)); totalMs += ms }
+        }
+        guard totalMs > 0 else { return [] }
+
+        let top = perPid.sorted { $0.msPerSec > $1.msPerSec }.prefix(3)
+        let names = processNames(pids: top.map { $0.pid })
+        let sysPercent = sys * 100
+        return top.map { pid, ms in
+            ProcessUsage(pid: Int(pid),
+                         name: names[pid] ?? "pid \(pid)",
+                         value: String(format: "%.1f%%", ms / totalMs * sysPercent))
+        }
+    }
+
+    /// pid → accumulated GPU time (ns), summed across all of the process's
+    /// AGXDeviceUserClient nodes.
+    private func gpuProcessTimes() -> [Int32: UInt64] {
+        var result: [Int32: UInt64] = [:]
+        let accelerator = IOServiceGetMatchingService(kIOMainPortDefault,
+                                                      IOServiceMatching("AGXAccelerator"))
+        guard accelerator != 0 else { return result }
+        defer { IOObjectRelease(accelerator) }
+
+        var childIter: io_iterator_t = 0
+        guard IORegistryEntryGetChildIterator(accelerator, kIOServicePlane, &childIter) == KERN_SUCCESS else {
+            return result
+        }
+        defer { IOObjectRelease(childIter) }
+
+        while true {
+            let child = IOIteratorNext(childIter)
+            if child == 0 { break }
+            defer { IOObjectRelease(child) }
+
+            // io_name_t is a 128-CChar tuple whose literal init trips a
+            // swiftc diagnostic bug — use a raw char buffer instead.
+            let nameBuf = UnsafeMutablePointer<CChar>.allocate(capacity: 128)
+            nameBuf.initialize(repeating: 0, count: 128)
+            let namePtr = UnsafeMutableRawPointer(nameBuf).assumingMemoryBound(to: io_name_t.self)
+            let gotClass = IOObjectGetClass(child, namePtr) == KERN_SUCCESS
+            let cls = gotClass ? String(cString: nameBuf) : ""
+            nameBuf.deallocate()
+            guard cls == "AGXDeviceUserClient" else { continue }
+
+            var propsRef: Unmanaged<CFMutableDictionary>?
+            guard IORegistryEntryCreateCFProperties(child, &propsRef, kCFAllocatorDefault, 0) == KERN_SUCCESS,
+                  let props = propsRef?.takeRetainedValue() as? [String: Any],
+                  let creator = props["IOUserClientCreator"] as? String,
+                  let pid = parseCreatorPid(creator) else { continue }
+
+            var total: UInt64 = 0
+            if let appUsage = props["AppUsage"] as? [[String: Any]] {
+                for entry in appUsage {
+                    if let t = entry["accumulatedGPUTime"] as? NSNumber, t.int64Value > 0 {
+                        total &+= t.uint64Value
+                    }
+                }
+            }
+            if total > 0 { result[pid, default: 0] &+= total }
+        }
+        return result
+    }
+
+    /// "pid 682, WindowServer" → 682
+    private func parseCreatorPid(_ creator: String) -> Int32? {
+        guard creator.hasPrefix("pid ") else { return nil }
+        let rest = creator.dropFirst(4)
+        guard let comma = rest.firstIndex(of: ",") else { return nil }
+        return Int32(rest[..<comma])
+    }
+
+    /// Resolve names for a small pid list with a single ps call.
+    private func processNames(pids: [Int32]) -> [Int32: String] {
+        guard !pids.isEmpty else { return [:] }
+        let list = pids.map(String.init).joined(separator: ",")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-co", "pid=,comm=", "-p", list]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard let _ = try? process.run() else { return [:] }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard let output = String(data: data, encoding: .utf8) else { return [:] }
+
+        var names: [Int32: String] = [:]
+        for line in output.split(separator: "\n") {
+            let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard parts.count == 2, let pid = Int32(parts[0]) else { continue }
+            names[pid] = String(parts[1])
+        }
+        return names
+    }
+
+    private func parsePS(arguments: [String],
+                         make: (Int, String, String) -> ProcessUsage) -> [ProcessUsage] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard let _ = try? process.run() else { return [] }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard let output = String(data: data, encoding: .utf8) else { return [] }
+
+        var result: [ProcessUsage] = []
+        for line in output.split(separator: "\n") {
+            let parts = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            guard parts.count == 3, let pid = Int(parts[0]) else { continue }
+            result.append(make(pid, String(parts[1]), String(parts[2])))
+            if result.count == 3 { break }
+        }
+        return result
     }
 
     // MARK: - CPU (delta of PROCESSOR_CPU_LOAD_INFO ticks)

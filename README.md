@@ -29,11 +29,11 @@ macOS 原生 app，实时监控本机所有 Kimi Code CLI 会话的工作状态�
 
 ### 系统状态
 
-CPU / GPU / 内存三个环形仪表（线宽固定 25pt，圆环直径上限 200pt）：
+CPU / GPU / 内存三个环形仪表（线宽固定 25pt，圆环直径上限 200pt），每个瓦片下方实时显示**该资源占用 Top 3 的进程及用量**（2 秒刷新）：
 
-- CPU：Mach `host_processor_info` tick 差分
-- GPU：IOKit `IOAccelerator` PerformanceStatistics（Apple Silicon，免 sudo）
-- 内存：`host_statistics64`，active + wired + compressed（与活动监视器口径一致），环中心显示百分比 + `已用/总量 GB`
+- CPU：Mach `host_processor_info` tick 差分；进程 Top3 来自 `ps -r`
+- GPU：IOKit `IOAccelerator` PerformanceStatistics（Apple Silicon，免 sudo）；进程 Top3 遍历 `AGXAccelerator` 下的 `AGXDeviceUserClient`，按 `accumulatedGPUTime` 差分后归一化分摊到系统总利用率（与 mactop 同口径）
+- 内存：`host_statistics64`，active + wired + compressed（与活动监视器口径一致），环中心显示百分比 + `已用/总量 GB`；进程 Top3 来自 `ps -m`（RSS）
 
 ### 菜单栏
 
