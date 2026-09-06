@@ -7,8 +7,8 @@ APP="KimiMonitor.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 
-swiftc -O -o "$APP/Contents/MacOS/KimiMonitor" \
-    $(find app -name '*.swift' | sort)
+swiftc -O -import-objc-header app/IOReportBridge.h -o "$APP/Contents/MacOS/KimiMonitor" \
+    $(find app -name '*.swift' | sort) -lIOReport
 
 cp app/Info.plist "$APP/Contents/Info.plist"
 

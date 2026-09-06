@@ -31,8 +31,8 @@ macOS 原生 app，实时监控本机所有 Kimi Code CLI 会话的工作状态�
 
 CPU / GPU / 内存 / 风扇&温度四个环形仪表（线宽固定 25pt，圆环直径 150pt），CPU/GPU/内存瓦片下方实时显示**该资源占用 Top 3 的进程及用量**（2 秒刷新）：
 
-- CPU：Mach `host_processor_info` tick 差分；进程 Top3 来自 `ps -r`
-- GPU：IOKit `IOAccelerator` PerformanceStatistics（Apple Silicon，免 sudo）；进程 Top3 遍历 `AGXAccelerator` 下的 `AGXDeviceUserClient`，按 `accumulatedGPUTime` 差分后归一化分摊到系统总利用率（与 mactop 同口径）
+- CPU：Mach `host_processor_info` tick 差分；进程 Top3 来自 `ps -r`；环中心下方小字显示**当前时钟频率**（IOReport 性能状态驻留加权，取最快集群）
+- GPU：IOKit `IOAccelerator` PerformanceStatistics（Apple Silicon，免 sudo）；进程 Top3 遍历 `AGXAccelerator` 下的 `AGXDeviceUserClient`，按 `accumulatedGPUTime` 差分后归一化分摊到系统总利用率（与 mactop 同口径）；环中心下方小字显示 GPU 频率（`GPUPH` 通道加权）
 - 内存：`host_statistics64`，active + wired + compressed，环中心显示百分比 + `已用/总量 GB`；进程 Top3 用 `proc_pid_rusage` 的 **phys_footprint**（与活动监视器同口径，无权限进程回退 RSS）
 - 风扇 / 温度：SMC 直读（AppleSMC，免 sudo）。环 = 全部风扇平均 RPM / 5500；下方显示 CPU 温度（`TCMb` Die 传感器）和 GPU 温度（`Tg*` 组最热键，启动时探测后缓存）；无风扇机型显示"无风扇"
 

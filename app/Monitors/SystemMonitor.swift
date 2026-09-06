@@ -27,6 +27,9 @@ final class SystemMonitor: ObservableObject {
         var fan2RPM: Double? = nil    // fan 1 if present
         var cpuTempC: Double? = nil
         var gpuTempC: Double? = nil
+        // Clock frequencies (IOReport performance states)
+        var cpuFreqMHz: Int? = nil
+        var gpuFreqMHz: Int? = nil
     }
 
     @Published private(set) var snapshot = Snapshot()
@@ -58,6 +61,9 @@ final class SystemMonitor: ObservableObject {
         s.memoryTop = topMemoryProcesses()
         s.gpuTop = topGPUProcesses(systemGpuFraction: s.gpuUsage)
         sampleSensors(&s)
+        let freqs = FrequencyReader.shared.sample()
+        s.cpuFreqMHz = freqs.cpuMHz
+        s.gpuFreqMHz = freqs.gpuMHz
         snapshot = s
     }
 

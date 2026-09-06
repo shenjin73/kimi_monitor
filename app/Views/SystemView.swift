@@ -8,10 +8,10 @@ struct SystemSection: View {
         // Exactly one flexible column per card: no leftover space on wide windows.
         var cards: [(title: String, value: Double, center: String, sub: String?, color: Color,
                      processes: [SystemMonitor.ProcessUsage]?)] = [
-            ("CPU", s.cpuUsage, percent(s.cpuUsage), nil, .blue, s.cpuTop),
+            ("CPU", s.cpuUsage, percent(s.cpuUsage), freqText(s.cpuFreqMHz), .blue, s.cpuTop),
         ]
         if let gpu = s.gpuUsage {
-            cards.append(("GPU", gpu, percent(gpu), nil, .purple, s.gpuTop))
+            cards.append(("GPU", gpu, percent(gpu), freqText(s.gpuFreqMHz), .purple, s.gpuTop))
         }
         cards.append(("内存", s.memoryUsedFraction, percent(s.memoryUsedFraction),
                       String(format: "%.1f / %.0f GB", s.memoryUsedGB, s.memoryTotalGB),
@@ -34,6 +34,12 @@ struct SystemSection: View {
 
     private func percent(_ v: Double) -> String {
         String(format: "%.0f%%", v * 100)
+    }
+
+    private func freqText(_ mhz: Int?) -> String? {
+        guard let mhz, mhz > 0 else { return nil }
+        return mhz >= 1000 ? String(format: "%.1f GHz", Double(mhz) / 1000)
+                           : "\(mhz) MHz"
     }
 }
 
