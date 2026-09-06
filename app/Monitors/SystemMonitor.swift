@@ -22,6 +22,11 @@ final class SystemMonitor: ObservableObject {
         var cpuTop: [ProcessUsage] = []
         var memoryTop: [ProcessUsage] = []
         var gpuTop: [ProcessUsage] = []
+        // SMC sensors (Apple Silicon)
+        var fanRPM: Double? = nil     // fan 0, nil when fanless
+        var fan2RPM: Double? = nil    // fan 1 if present
+        var cpuTempC: Double? = nil
+        var gpuTempC: Double? = nil
     }
 
     @Published private(set) var snapshot = Snapshot()
@@ -52,7 +57,50 @@ final class SystemMonitor: ObservableObject {
         s.cpuTop = topCPUProcesses()
         s.memoryTop = topMemoryProcesses()
         s.gpuTop = topGPUProcesses(systemGpuFraction: s.gpuUsage)
+        sampleSensors(&s)
         snapshot = s
+    }
+
+    // MARK: - SMC sensors (fan RPM + temperatures)
+
+    /// Resolved once: SMC key names vary by chip, so we probe once and cache.
+    private var sensorKeys: (fanCount: Int, cpuTempKey: String, gpuTempKey: String)?
+
+    private func sampleSensors(_ s: inout Snapshot) {
+        let smc = SMC.shared
+        guard smc.isAvailable else { return }
+
+        if sensorKeys == nil {
+            let fanCount = Int(smc.readNumber("FNum") ?? 0)
+            // CPU die sensor; fall back to the hottest p/e-cluster sensor.
+            var cpuKey = "TCMb"
+            if smc.readNumber(cpuKey) == nil {
+                cpuKey = hottestTempKey(secondChars: ["p", "e"]) ?? ""
+            }
+            let gpuKey = hottestTempKey(secondChars: ["g"]) ?? ""
+            sensorKeys = (fanCount, cpuKey, gpuKey)
+        }
+        let keys = sensorKeys!
+
+        if keys.fanCount > 0 {
+            s.fanRPM = smc.readNumber("F0Ac")
+            if keys.fanCount > 1 { s.fan2RPM = smc.readNumber("F1Ac") }
+        }
+        if !keys.cpuTempKey.isEmpty { s.cpuTempC = smc.readNumber(keys.cpuTempKey) }
+        if !keys.gpuTempKey.isEmpty { s.gpuTempC = smc.readNumber(keys.gpuTempKey) }
+    }
+
+    /// Hottest plausible temperature key whose second character is in the set
+    /// (SMC convention: Tp* = CPU P-core, Te* = E-core, Tg* = GPU).
+    private func hottestTempKey(secondChars: Set<Character>) -> String? {
+        var best: (key: String, value: Double)?
+        for key in SMC.shared.allKeys() where key.hasPrefix("T") && key.count > 1 {
+            let second = key[key.index(key.startIndex, offsetBy: 1)]
+            guard secondChars.contains(second),
+                  let v = SMC.shared.readNumber(key), v > 10, v < 130 else { continue }
+            if best == nil || v > best!.value { best = (key, v) }
+        }
+        return best?.key
     }
 
     // MARK: - Top processes (via ps, sorted by ps itself)
@@ -65,12 +113,55 @@ final class SystemMonitor: ObservableObject {
         }
     }
 
+    /// Activity Monitor's "Memory" column is phys_footprint, not RSS — RSS
+    /// misses mapped/compressed memory (e.g. ML servers show 18 GB in AM but
+    /// ~2 GB RSS). proc_pid_rusage gives footprint for processes we may
+    /// inspect; fall back to ps RSS for the rest (e.g. _windowserver).
     private func topMemoryProcesses() -> [ProcessUsage] {
-        parsePS(arguments: ["-Aco", "pid=,rss=,comm=", "-m"]) { pid, metric, name in
-            let mb = (Double(metric) ?? 0) / 1024
-            let text = mb >= 1024 ? String(format: "%.1f GB", mb / 1024)
-                                  : String(format: "%.0f MB", mb)
+        let rows = rawPS(arguments: ["-Aco", "pid=,rss=,comm="])
+        var all: [(pid: Int, name: String, bytes: UInt64)] = []
+        for (pid, metric, name) in rows {
+            guard let rssKB = UInt64(metric) else { continue }
+            let bytes = footprintOf(Int32(pid)) ?? rssKB * 1024
+            all.append((pid, name, bytes))
+        }
+        return all.sorted { $0.bytes > $1.bytes }.prefix(3).map { pid, name, bytes in
+            let gb = Double(bytes) / 1e9
+            let text = gb >= 1 ? String(format: "%.1f GB", gb)
+                               : String(format: "%.0f MB", gb * 1000)
             return ProcessUsage(pid: pid, name: name, value: text)
+        }
+    }
+
+    /// rusage_info_v4 layout (XNU): uuid[16] + 7 × UInt64 → phys_footprint
+    /// is at byte offset 72. Oversized buffer guards against SDK size drift.
+    private func footprintOf(_ pid: Int32) -> UInt64? {
+        var buf = [UInt8](repeating: 0, count: 1024)
+        let ret = buf.withUnsafeMutableBufferPointer { bp -> Int32 in
+            proc_pid_rusage(pid, RUSAGE_INFO_V4,
+                            UnsafeMutableRawPointer(bp.baseAddress!)
+                                .assumingMemoryBound(to: rusage_info_t?.self))
+        }
+        guard ret == 0 else { return nil }
+        return buf.withUnsafeBytes { $0.load(fromByteOffset: 72, as: UInt64.self) }
+    }
+
+    /// Run ps once and return (pid, metricColumn, name) rows.
+    private func rawPS(arguments: [String]) -> [(Int, String, String)] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard let _ = try? process.run() else { return [] }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard let output = String(data: data, encoding: .utf8) else { return [] }
+        return output.split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            guard parts.count == 3, let pid = Int(parts[0]) else { return nil }
+            return (pid, String(parts[1]), String(parts[2]))
         }
     }
 

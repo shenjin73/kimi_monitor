@@ -5,12 +5,12 @@ import SwiftUI
 struct MainView: View {
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 SessionsSection()
                 QuotaSection()
                 SystemSection()
             }
-            .padding(20)
+            .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(minWidth: 540, minHeight: 420)

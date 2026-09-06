@@ -91,7 +91,7 @@ private struct QuotaCard: View {
                 }
             }
         }
-        .padding(14)
+        .padding(12)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
     }
 }

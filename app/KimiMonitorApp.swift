@@ -24,6 +24,6 @@ struct KimiMonitorApp: App {
                     openWindow(id: "main")
                 }
         }
-        .defaultSize(width: 800, height: 540)
+        .defaultSize(width: 860, height: 700)
     }
 }

@@ -29,11 +29,12 @@ macOS 原生 app，实时监控本机所有 Kimi Code CLI 会话的工作状态�
 
 ### 系统状态
 
-CPU / GPU / 内存三个环形仪表（线宽固定 25pt，圆环直径上限 200pt），每个瓦片下方实时显示**该资源占用 Top 3 的进程及用量**（2 秒刷新）：
+CPU / GPU / 内存 / 风扇&温度四个环形仪表（线宽固定 25pt，圆环直径 150pt），CPU/GPU/内存瓦片下方实时显示**该资源占用 Top 3 的进程及用量**（2 秒刷新）：
 
 - CPU：Mach `host_processor_info` tick 差分；进程 Top3 来自 `ps -r`
 - GPU：IOKit `IOAccelerator` PerformanceStatistics（Apple Silicon，免 sudo）；进程 Top3 遍历 `AGXAccelerator` 下的 `AGXDeviceUserClient`，按 `accumulatedGPUTime` 差分后归一化分摊到系统总利用率（与 mactop 同口径）
-- 内存：`host_statistics64`，active + wired + compressed（与活动监视器口径一致），环中心显示百分比 + `已用/总量 GB`；进程 Top3 来自 `ps -m`（RSS）
+- 内存：`host_statistics64`，active + wired + compressed，环中心显示百分比 + `已用/总量 GB`；进程 Top3 用 `proc_pid_rusage` 的 **phys_footprint**（与活动监视器同口径，无权限进程回退 RSS）
+- 风扇 / 温度：SMC 直读（AppleSMC，免 sudo）。环 = 全部风扇平均 RPM / 5500；下方显示 CPU 温度（`TCMb` Die 传感器）和 GPU 温度（`Tg*` 组最热键，启动时探测后缓存）；无风扇机型显示"无风扇"
 
 ### 菜单栏
 
@@ -72,7 +73,8 @@ app/Models.swift              # 数据模型（SessionState / UsageResponse）�
 app/Monitors/
   SessionMonitor.swift        # 轮询状态目录，死会话剔除
   QuotaMonitor.swift          # OAuth token 刷新 + /usages 拉取
-  SystemMonitor.swift         # CPU / GPU / 内存采样
+  SystemMonitor.swift         # CPU / GPU / 内存 / SMC 传感器采样
+  SMC.swift                   # AppleSMC 读取（风扇 RPM / 温度键枚举）
 app/Views/
   MainView.swift              # 单页骨架（ScrollView + 三个 Section）
   SessionsView.swift          # 会话瓦片（呼吸灯）

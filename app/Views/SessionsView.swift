@@ -82,7 +82,7 @@ private struct SessionTile: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 24)
+        .padding(.vertical, 16)
         .frame(maxWidth: .infinity)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
         .contextMenu {
