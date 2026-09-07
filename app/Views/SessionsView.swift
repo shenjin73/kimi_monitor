@@ -26,12 +26,10 @@ struct ClaudeSessionsSection: View {
             VStack(alignment: .leading, spacing: 8) {
                 SectionHeader(title: "Claude 会话", icon: "sparkles")
 
-                TokenSummaryRow(today: tokens.today, week: tokens.week)
-
                 let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                     ForEach(entries) { entry in
-                        SessionTile(entry: entry)
+                        SessionTile(entry: entry, tokenTally: tokens)
                     }
                 }
             }
@@ -72,48 +70,6 @@ struct SessionEntry: Identifiable {
     }
 }
 
-// MARK: - Token summary row
-
-private struct TokenSummaryRow: View {
-    let today: ClaudeTokenMonitor.Tally
-    let week:  ClaudeTokenMonitor.Tally
-
-    var body: some View {
-        HStack(spacing: 0) {
-            tokenCell(label: "今日", input: today.input, output: today.output)
-            Divider().frame(height: 32).padding(.horizontal, 12)
-            tokenCell(label: "近 7 天", input: week.input, output: week.output)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    @ViewBuilder
-    private func tokenCell(label: String, input: Int, output: Int) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
-            HStack(spacing: 8) {
-                Label(formatTokens(input),  systemImage: "arrow.down.circle")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.primary)
-                Label(formatTokens(output), systemImage: "arrow.up.circle")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func formatTokens(_ n: Int) -> String {
-        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
-        if n >= 1_000     { return String(format: "%.1fK", Double(n) / 1_000) }
-        return "\(n)"
-    }
-}
-
 // MARK: - Generic section
 
 private struct SessionsSection: View {
@@ -124,9 +80,6 @@ private struct SessionsSection: View {
     private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
 
     var body: some View {
-        // Hide the whole section (header included) when there is no active
-        // session; it reappears automatically once a session is detected,
-        // since `entries` is @Published upstream.
         if !entries.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 SectionHeader(title: title, icon: icon)
@@ -146,14 +99,15 @@ private struct SessionsSection: View {
 
 private struct SessionTile: View {
     let entry: SessionEntry
+    var tokenTally: ClaudeTokenMonitor? = nil
     @State private var breathing = false
 
     private var statusColor: Color {
         switch entry.effective {
-        case .working: return .blue
+        case .working:     return .blue
         case .waitingUser: return .orange
-        case .idle: return .green
-        case .offline: return .gray
+        case .idle:        return .green
+        case .offline:     return .gray
         }
     }
 
@@ -161,6 +115,7 @@ private struct SessionTile: View {
 
     var body: some View {
         HStack(spacing: 16) {
+            // ── Status dot ──────────────────────────────────────
             Circle()
                 .fill(statusColor)
                 .frame(width: 56, height: 56)
@@ -176,9 +131,10 @@ private struct SessionTile: View {
                 .onAppear { breathing = isBreathing }
                 .onChange(of: isBreathing) { _, new in breathing = new }
 
-            VStack(alignment: .leading, spacing: 6) {
+            // ── Left: status / time / cwd ────────────────────────
+            VStack(alignment: .leading, spacing: 4) {
                 Text(entry.effective.label)
-                    .font(.callout.weight(.medium))
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(statusColor)
 
                 Text(updatedText)
@@ -192,10 +148,15 @@ private struct SessionTile: View {
                     .truncationMode(.middle)
             }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
+
+            // ── Right: token counts (Claude only) ───────────────
+            if let t = tokenTally {
+                tokenColumn(t)
+            }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 16)
+        .padding(.vertical, 14)
         .frame(maxWidth: .infinity)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
         .contextMenu {
@@ -210,6 +171,48 @@ private struct SessionTile: View {
             }
         }
         .help(entry.sessionTitle ?? entry.sessionId)
+    }
+
+    @ViewBuilder
+    private func tokenColumn(_ t: ClaudeTokenMonitor) -> some View {
+        VStack(alignment: .trailing, spacing: 5) {
+            tokenRow(label: "今日", input: t.today.input, output: t.today.output)
+            tokenRow(label: "近7天", input: t.week.input,  output: t.week.output)
+        }
+    }
+
+    @ViewBuilder
+    private func tokenRow(label: String, input: Int, output: Int) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(width: 34, alignment: .trailing)
+
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.down.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(fmt(input))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.up.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Text(fmt(output))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func fmt(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000     { return String(format: "%.1fK", Double(n) / 1_000) }
+        return "\(n)"
     }
 
     private var cwdText: String {
