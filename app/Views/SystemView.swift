@@ -209,10 +209,11 @@ private struct FanTempCard: View {
             VStack(spacing: 4) {
                 sensorRow("CPU 温度", value: temp(snapshot.cpuTempC))
                 sensorRow("GPU 温度", value: temp(snapshot.gpuTempC))
+                sensorRow("系统功耗", value: power(snapshot.systemPowerW))
             }
             .padding(.top, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 66)
+            .frame(height: 82)
         }
         .padding(.top, 14)
         .padding(.bottom, 18)
@@ -237,6 +238,10 @@ private struct FanTempCard: View {
 
     private func temp(_ v: Double?) -> String {
         v.map { String(format: "%.1f °C", $0) } ?? "-"
+    }
+
+    private func power(_ v: Double?) -> String {
+        v.map { String(format: "%.1f W", $0) } ?? "-"
     }
 
     private func sensorRow(_ label: String, value: String) -> some View {

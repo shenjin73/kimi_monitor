@@ -27,6 +27,7 @@ final class SystemMonitor: ObservableObject {
         var fan2RPM: Double? = nil    // fan 1 if present
         var cpuTempC: Double? = nil
         var gpuTempC: Double? = nil
+        var systemPowerW: Double? = nil   // from PowerTelemetryData via IOKit
         // Clock frequencies (IOReport performance states)
         var cpuFreqMHz: Int? = nil
         var gpuFreqMHz: Int? = nil
@@ -94,6 +95,32 @@ final class SystemMonitor: ObservableObject {
         }
         if !keys.cpuTempKey.isEmpty { s.cpuTempC = smc.readNumber(keys.cpuTempKey) }
         if !keys.gpuTempKey.isEmpty { s.gpuTempC = smc.readNumber(keys.gpuTempKey) }
+        s.systemPowerW = sampleSystemPowerW()
+    }
+
+    /// Read whole-system power (mW) from AppleSmartBattery's PowerTelemetryData.
+    /// On AC: SystemPowerIn = adapter → system watts.
+    /// On battery: BatteryPower = discharge watts.
+    /// No root required — this key is world-readable via IOKit.
+    private func sampleSystemPowerW() -> Double? {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault,
+                          IOServiceMatching("AppleSmartBattery"))
+        guard service != 0 else { return nil }
+        defer { IOObjectRelease(service) }
+        guard let cfProps = IORegistryEntryCreateCFProperty(
+                service,
+                "PowerTelemetryData" as CFString,
+                kCFAllocatorDefault, 0)?.takeRetainedValue() as? [String: Any]
+        else { return nil }
+
+        // Prefer AC input power; fall back to battery discharge power.
+        if let mw = cfProps["SystemPowerIn"] as? Int, mw > 0 {
+            return Double(mw) / 1000
+        }
+        if let mw = cfProps["BatteryPower"] as? Int, mw > 0 {
+            return Double(mw) / 1000
+        }
+        return nil
     }
 
     /// Hottest plausible temperature key whose second character is in the set
