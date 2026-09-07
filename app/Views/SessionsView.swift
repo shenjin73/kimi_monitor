@@ -18,13 +18,25 @@ struct KimiSessionsSection: View {
 
 struct ClaudeSessionsSection: View {
     @EnvironmentObject var monitor: ClaudeSessionMonitor
+    @EnvironmentObject var tokens: ClaudeTokenMonitor
 
     var body: some View {
-        SessionsSection(
-            title: "Claude 会话",
-            icon: "sparkles",
-            entries: monitor.entries.map { SessionEntry(from: $0) }
-        )
+        let entries = monitor.entries.map { SessionEntry(from: $0) }
+        if !entries.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionHeader(title: "Claude 会话", icon: "sparkles")
+
+                TokenSummaryRow(today: tokens.today, week: tokens.week)
+
+                let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                    ForEach(entries) { entry in
+                        SessionTile(entry: entry)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
@@ -57,6 +69,48 @@ struct SessionEntry: Identifiable {
         cwd = e.state.cwd
         updatedAt = e.state.updated_at
         event = e.state.event
+    }
+}
+
+// MARK: - Token summary row
+
+private struct TokenSummaryRow: View {
+    let today: ClaudeTokenMonitor.Tally
+    let week:  ClaudeTokenMonitor.Tally
+
+    var body: some View {
+        HStack(spacing: 0) {
+            tokenCell(label: "今日", input: today.input, output: today.output)
+            Divider().frame(height: 32).padding(.horizontal, 12)
+            tokenCell(label: "近 7 天", input: week.input, output: week.output)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private func tokenCell(label: String, input: Int, output: Int) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Label(formatTokens(input),  systemImage: "arrow.down.circle")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.primary)
+                Label(formatTokens(output), systemImage: "arrow.up.circle")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func formatTokens(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000     { return String(format: "%.1fK", Double(n) / 1_000) }
+        return "\(n)"
     }
 }
 

@@ -7,6 +7,7 @@ struct KimiMonitorApp: App {
 
     @StateObject private var sessions = SessionMonitor.shared
     @StateObject private var claudeSessions = ClaudeSessionMonitor.shared
+    @StateObject private var claudeTokens = ClaudeTokenMonitor.shared
     @StateObject private var quota = QuotaMonitor.shared
     @StateObject private var system = SystemMonitor.shared
 
@@ -15,11 +16,13 @@ struct KimiMonitorApp: App {
             MainView()
                 .environmentObject(sessions)
                 .environmentObject(claudeSessions)
+                .environmentObject(claudeTokens)
                 .environmentObject(quota)
                 .environmentObject(system)
                 .onAppear {
                     sessions.start()
                     claudeSessions.start()
+                    claudeTokens.start()
                     quota.start()
                     system.start()
                 }
