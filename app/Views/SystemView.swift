@@ -5,7 +5,6 @@ struct SystemSection: View {
 
     var body: some View {
         let s = monitor.snapshot
-        // Exactly one flexible column per card: no leftover space on wide windows.
         var cards: [(title: String, value: Double, center: String, sub: String?, color: Color,
                      processes: [SystemMonitor.ProcessUsage]?)] = [
             ("CPU", s.cpuUsage, percent(s.cpuUsage), freqText(s.cpuFreqMHz), .blue, s.cpuTop),
@@ -43,13 +42,73 @@ struct SystemSection: View {
     }
 }
 
+// MARK: - Ring
+
+/// A single-colour ring gauge with a tubular 3-D feel. The lighting runs
+/// *across* the stroke width (inner edge shaded, outer edge lit) so the arc
+/// reads as one continuous rounded tube instead of two stacked colours.
+struct Ring3D: View {
+    let value: Double   // 0…1
+    let color: Color
+    let lineWidth: CGFloat
+
+    var body: some View {
+        GeometryReader { geo in
+            let size = min(geo.size.width, geo.size.height)
+            let clamped = min(max(value, 0), 1)
+
+            ZStack {
+                // ── Track — flat light single colour ──────────────
+                Circle()
+                    .stroke(color.opacity(0.16), lineWidth: lineWidth)
+
+                // ── Filled arc — tubular ──────────────────────────
+                if clamped > 0 {
+                    let arc = Circle()
+                        .trim(from: 0, to: clamped)
+                        .rotation(.degrees(-90))
+
+                    // Solid base
+                    arc.stroke(color,
+                               style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+
+                    // Inner-edge shade: darker band on the inner half of the tube
+                    arc.stroke(Color.black.opacity(0.28),
+                               style: StrokeStyle(lineWidth: lineWidth * 0.5, lineCap: .round))
+                        .padding(lineWidth * 0.25)
+                        .blur(radius: lineWidth * 0.14)
+
+                    // Outer-edge highlight: bright band on the outer half
+                    arc.stroke(Color.white.opacity(0.50),
+                               style: StrokeStyle(lineWidth: lineWidth * 0.30, lineCap: .round))
+                        .padding(-lineWidth * 0.27)
+                        .blur(radius: lineWidth * 0.1)
+                }
+            }
+            // Keep highlight/shade inside the ring band so nothing spills.
+            .frame(width: size, height: size)
+            .mask(
+                Circle().stroke(Color.black, lineWidth: lineWidth + 1)
+            )
+            .frame(width: size, height: size)
+            .shadow(color: color.opacity(0.30), radius: 5, x: 0, y: 3)
+            .animation(.easeInOut(duration: 0.3), value: value)
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+    }
+}
+
+// MARK: - Gauge card
+
 private struct GaugeCard: View {
     let title: String
-    let value: Double // 0...1
+    let value: Double
     let center: String
     var sub: String? = nil
     let color: Color
     var processes: [SystemMonitor.ProcessUsage]? = nil
+
+    private let lineWidth: CGFloat = 25
 
     var body: some View {
         VStack(spacing: 0) {
@@ -59,15 +118,9 @@ private struct GaugeCard: View {
 
             GeometryReader { geo in
                 let d = min(geo.size.width, geo.size.height)
-                let lineWidth: CGFloat = 25 // fixed, does not scale with window size
                 ZStack {
-                    Circle()
-                        .stroke(color.opacity(0.18), lineWidth: lineWidth)
-                    Circle()
-                        .trim(from: 0, to: min(max(value, 0), 1))
-                        .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .animation(.easeInOut(duration: 0.3), value: value)
+                    Ring3D(value: value, color: color, lineWidth: lineWidth)
+
                     VStack(spacing: 1) {
                         Text(center)
                             .font(.system(size: d * 0.19, weight: .semibold).monospacedDigit())
@@ -85,12 +138,9 @@ private struct GaugeCard: View {
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
             }
-            // Fixed ring area keeps every tile identical and the page scroll-free.
             .frame(height: 150)
             .padding(.top, 10)
 
-            // Top-3 process list inside the tile. Fixed height (3 rows) so all
-            // tiles stay the same height even when a tile has no data.
             VStack(spacing: 4) {
                 if let processes, !processes.isEmpty {
                     ForEach(processes) { proc in
@@ -115,20 +165,19 @@ private struct GaugeCard: View {
             .frame(height: 66)
         }
         .padding(.top, 14)
-        // The 25pt stroke overhangs the ring frame by 12.5pt; keep extra
-        // bottom room so the ring never touches the tile edge.
         .padding(.bottom, 18)
         .padding(.horizontal, 12)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
-/// Fan RPM + temperature tile (same footprint as the gauge tiles).
-/// The ring shows fan 0 RPM against the 5500 RPM max.
+// MARK: - Fan / Temp card
+
 private struct FanTempCard: View {
     let snapshot: SystemMonitor.Snapshot
 
     private let maxRPM: Double = 5500
+    private let lineWidth: CGFloat = 25
 
     var body: some View {
         VStack(spacing: 0) {
@@ -138,15 +187,9 @@ private struct FanTempCard: View {
 
             GeometryReader { geo in
                 let d = min(geo.size.width, geo.size.height)
-                let lineWidth: CGFloat = 25
                 ZStack {
-                    Circle()
-                        .stroke(Color.orange.opacity(0.18), lineWidth: lineWidth)
-                    Circle()
-                        .trim(from: 0, to: fanFraction)
-                        .stroke(Color.orange, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .animation(.easeInOut(duration: 0.3), value: fanFraction)
+                    Ring3D(value: fanFraction, color: .orange, lineWidth: lineWidth)
+
                     VStack(spacing: 1) {
                         Text(fanCenter)
                             .font(.system(size: d * 0.19, weight: .semibold).monospacedDigit())
@@ -177,8 +220,6 @@ private struct FanTempCard: View {
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    /// Average RPM across all fans (shown in the ring center and used for
-    /// the ring fraction).
     private var avgFanRPM: Double? {
         guard let f0 = snapshot.fanRPM else { return nil }
         if let f1 = snapshot.fan2RPM { return (f0 + f1) / 2 }

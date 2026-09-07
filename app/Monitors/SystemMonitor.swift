@@ -114,62 +114,116 @@ final class SystemMonitor: ObservableObject {
     /// `ps -Aco pid=,<metric>=,comm= <sortFlag>`; -r sorts by CPU, -m by memory.
     private func topCPUProcesses() -> [ProcessUsage] {
         parsePS(arguments: ["-Aco", "pid=,pcpu=,comm=", "-r"]) { pid, metric, name in
-            ProcessUsage(pid: pid, name: name,
+            ProcessUsage(pid: pid, name: friendlyName(name),
                          value: String(format: "%.1f%%", Double(metric) ?? 0))
         }
     }
 
-    /// Activity Monitor's "Memory" column is phys_footprint, not RSS — RSS
-    /// misses mapped/compressed memory (e.g. ML servers show 18 GB in AM but
-    /// ~2 GB RSS). proc_pid_rusage gives footprint for processes we may
-    /// inspect; fall back to ps RSS for the rest (e.g. _windowserver).
+    /// Activity Monitor's "Memory" column is phys_footprint. `top -l 1 -o mem`
+    /// reports exactly that in its MEM column for *every* process (including
+    /// root-owned ones we can't proc_pid_rusage), so its ordering matches
+    /// Activity Monitor. We parse MEM (e.g. "461M", "1080M", "1.2G") directly
+    /// rather than mixing footprint + RSS, which used to over-rank RSS-only
+    /// processes like wdavdaemon.
     private func topMemoryProcesses() -> [ProcessUsage] {
-        let rows = rawPS(arguments: ["-Aco", "pid=,rss=,comm="])
-        var all: [(pid: Int, name: String, bytes: UInt64)] = []
-        for (pid, metric, name) in rows {
-            guard let rssKB = UInt64(metric) else { continue }
-            let bytes = footprintOf(Int32(pid)) ?? rssKB * 1024
-            all.append((pid, name, bytes))
-        }
-        return all.sorted { $0.bytes > $1.bytes }.prefix(3).map { pid, name, bytes in
+        let rows = topMemRows()
+        return rows.prefix(3).map { pid, name, bytes in
             let gb = Double(bytes) / 1e9
             let text = gb >= 1 ? String(format: "%.1f GB", gb)
                                : String(format: "%.0f MB", gb * 1000)
-            return ProcessUsage(pid: pid, name: name, value: text)
+            return ProcessUsage(pid: pid, name: friendlyName(name), value: text)
         }
     }
 
-    /// rusage_info_v4 layout (XNU): uuid[16] + 7 × UInt64 → phys_footprint
-    /// is at byte offset 72. Oversized buffer guards against SDK size drift.
-    private func footprintOf(_ pid: Int32) -> UInt64? {
-        var buf = [UInt8](repeating: 0, count: 1024)
-        let ret = buf.withUnsafeMutableBufferPointer { bp -> Int32 in
-            proc_pid_rusage(pid, RUSAGE_INFO_V4,
-                            UnsafeMutableRawPointer(bp.baseAddress!)
-                                .assumingMemoryBound(to: rusage_info_t?.self))
-        }
-        guard ret == 0 else { return nil }
-        return buf.withUnsafeBytes { $0.load(fromByteOffset: 72, as: UInt64.self) }
-    }
-
-    /// Run ps once and return (pid, metricColumn, name) rows.
-    private func rawPS(arguments: [String]) -> [(Int, String, String)] {
+    /// Run `top` once, mem-sorted, and parse (pid, command, footprintBytes).
+    /// `top`'s tabular output puts COMMAND and MEM in fixed positions; we key
+    /// off the column headers so we don't depend on their absolute index.
+    private func topMemRows() -> [(pid: Int, name: String, bytes: UInt64)] {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = arguments
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/top")
+        process.arguments = ["-l", "1", "-o", "mem", "-n", "12",
+                             "-stats", "pid,command,mem"]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
-        guard let _ = try? process.run() else { return [] }
+        guard (try? process.run()) != nil else { return [] }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard let output = String(data: data, encoding: .utf8) else { return [] }
-        return output.split(separator: "\n").compactMap { line in
-            let parts = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
-            guard parts.count == 3, let pid = Int(parts[0]) else { return nil }
-            return (pid, String(parts[1]), String(parts[2]))
+
+        var rows: [(pid: Int, name: String, bytes: UInt64)] = []
+        var inTable = false
+        for line in output.split(separator: "\n") {
+            // The data table begins after the "PID  COMMAND  MEM" header.
+            if !inTable {
+                if line.hasPrefix("PID") { inTable = true }
+                continue
+            }
+            // Columns: PID COMMAND MEM. COMMAND may contain spaces, so split
+            // the PID off the front and the MEM off the back.
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let firstSpace = trimmed.firstIndex(of: " "),
+                  let pid = Int(trimmed[..<firstSpace]) else { continue }
+            let rest = trimmed[trimmed.index(after: firstSpace)...]
+                .trimmingCharacters(in: .whitespaces)
+            guard let lastSpace = rest.lastIndex(of: " ") else { continue }
+            let name = String(rest[..<lastSpace]).trimmingCharacters(in: .whitespaces)
+            let memToken = String(rest[rest.index(after: lastSpace)...])
+            guard let bytes = parseTopMem(memToken) else { continue }
+            rows.append((pid, name, bytes))
         }
+        return rows
     }
+
+    /// Parse top's MEM token: "461M", "1080M", "1.2G", "512K", "8192B".
+    private func parseTopMem(_ token: String) -> UInt64? {
+        guard let unit = token.last else { return nil }
+        let numberPart = token.dropLast()
+        guard let value = Double(numberPart) else { return nil }
+        let multiplier: Double
+        switch unit {
+        case "B": multiplier = 1
+        case "K": multiplier = 1024
+        case "M": multiplier = 1024 * 1024
+        case "G": multiplier = 1024 * 1024 * 1024
+        case "T": multiplier = 1024 * 1024 * 1024 * 1024
+        default:  return nil
+        }
+        return UInt64(value * multiplier)
+    }
+
+    /// Map raw executable names (comm) to the friendlier labels Activity
+    /// Monitor shows. Covers the common XPC/helper processes whose comm is a
+    /// reverse-DNS identifier; falls back to the raw name otherwise.
+    func friendlyName(_ comm: String) -> String {
+        // Exact matches first.
+        if let mapped = Self.nameMap[comm] { return mapped }
+        // `top` truncates the command column, so also match by prefix for the
+        // known long identifiers.
+        for (prefix, label) in Self.namePrefixMap where comm.hasPrefix(prefix) {
+            return label
+        }
+        // WebKit XPC services. `ps` gives the full "com.apple.WebKit.GPU";
+        // `top` truncates the command to "com.apple.WebKit", so match both.
+        if comm.hasPrefix("com.apple.WebKit") {
+            let suffix = comm
+                .replacingOccurrences(of: "com.apple.WebKit.", with: "")
+                .replacingOccurrences(of: "com.apple.WebKit", with: "")
+            return suffix.isEmpty ? "WebKit" : "WebKit \(suffix)"
+        }
+        return comm
+    }
+
+    private static let nameMap: [String: String] = [
+        "WindowServer": "WindowServer",
+        "mysqld":       "mysqld",
+    ]
+
+    /// Prefix matches — handle `top`'s truncated command names (e.g.
+    /// "wdavdaemon_unpri" for "wdavdaemon_unprivileged").
+    private static let namePrefixMap: [(String, String)] = [
+        ("wdavdaemon", "Microsoft Defender"),
+    ]
 
     // MARK: - Top GPU processes (IORegistry AGXDeviceUserClient)
 
@@ -209,7 +263,7 @@ final class SystemMonitor: ObservableObject {
         let sysPercent = sys * 100
         return top.map { pid, ms in
             ProcessUsage(pid: Int(pid),
-                         name: names[pid] ?? "pid \(pid)",
+                         name: friendlyName(names[pid] ?? "pid \(pid)"),
                          value: String(format: "%.1f%%", ms / totalMs * sysPercent))
         }
     }

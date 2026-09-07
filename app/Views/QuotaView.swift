@@ -34,7 +34,6 @@ struct QuotaSection: View {
             }
 
             if !cards.isEmpty {
-                // One flexible column per card: fills the width, no empty columns.
                 LazyVGrid(columns: cards.map { _ in GridItem(.flexible(), spacing: 14) }, spacing: 14) {
                     ForEach(Array(cards.enumerated()), id: \.offset) { _, card in
                         QuotaCard(title: card.title, quota: card.quota)
@@ -81,7 +80,7 @@ private struct QuotaCard: View {
                     .font(.title2.weight(.semibold).monospacedDigit())
                     .foregroundStyle(color)
             }
-            ProgressBar(value: fraction, color: color)
+            Bar3D(value: fraction, color: color)
             HStack {
                 Spacer()
                 if let reset = parseISO8601(quota.resetTime) {
@@ -96,22 +95,90 @@ private struct QuotaCard: View {
     }
 }
 
-/// Rounded bar 18pt thick.
-private struct ProgressBar: View {
-    let value: Double // 0...1
+// MARK: - 3D Bar
+
+struct Bar3D: View {
+    let value: Double  // 0…1
     let color: Color
+
+    private let barHeight: CGFloat = 20
+    private let radius: CGFloat = 10   // = barHeight / 2
 
     var body: some View {
         GeometryReader { geo in
+            let w = geo.size.width
+            let clamped = min(max(value, 0), 1)
+            // Minimum visible width when value > 0: enough for a rounded cap
+            let filled: CGFloat = clamped > 0 ? max(w * clamped, radius * 2) : 0
+
             ZStack(alignment: .leading) {
+                // ── Track ──────────────────────────────────────────
                 Capsule()
-                    .fill(color.opacity(0.18))
+                    .fill(
+                        LinearGradient(
+                            colors: [color.opacity(0.10), color.opacity(0.22)],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
                 Capsule()
-                    .fill(color)
-                    .frame(width: geo.size.width * min(max(value, 0), 1))
-                    .animation(.easeInOut(duration: 0.3), value: value)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [Color.black.opacity(0.22), Color.clear],
+                            startPoint: .top, endPoint: .center
+                        ),
+                        lineWidth: 1.5
+                    )
+
+                // ── Filled bar — clipped to exact width ───────────
+                if filled > 0 {
+                    ZStack(alignment: .leading) {
+                        // Base gradient
+                        Rectangle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [color.opacity(0.65), color, color.opacity(0.80)],
+                                    startPoint: .bottom, endPoint: .top
+                                )
+                            )
+                        // Top-gloss strip
+                        Rectangle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.42), Color.clear],
+                                    startPoint: .top, endPoint: .bottom
+                                )
+                            )
+                            .frame(height: barHeight * 0.45)
+                            .frame(maxHeight: .infinity, alignment: .top)
+                        // Right-cap specular dot
+                        RadialGradient(
+                            colors: [Color.white.opacity(0.50), Color.clear],
+                            center: .center,
+                            startRadius: 0,
+                            endRadius: barHeight * 0.7
+                        )
+                        .frame(width: barHeight * 1.4, height: barHeight)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                    // Clip the whole filled block to a rounded rect of exactly `filled` width
+                    .frame(width: filled, height: barHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: radius))
+                    .animation(.easeInOut(duration: 0.35), value: value)
+                }
+
+                // ── Outer rim highlight ───────────────────────────
+                Capsule()
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.20), Color.clear],
+                            startPoint: .top, endPoint: .center
+                        ),
+                        lineWidth: 1
+                    )
             }
+            .frame(height: barHeight)
+            .shadow(color: color.opacity(0.30), radius: 3, x: 0, y: 2)
         }
-        .frame(height: 18)
+        .frame(height: barHeight)
     }
 }

@@ -6,6 +6,7 @@ struct KimiMonitorApp: App {
     @Environment(\.openWindow) private var openWindow
 
     @StateObject private var sessions = SessionMonitor.shared
+    @StateObject private var claudeSessions = ClaudeSessionMonitor.shared
     @StateObject private var quota = QuotaMonitor.shared
     @StateObject private var system = SystemMonitor.shared
 
@@ -13,10 +14,12 @@ struct KimiMonitorApp: App {
         WindowGroup("Kimi Monitor", id: "main") {
             MainView()
                 .environmentObject(sessions)
+                .environmentObject(claudeSessions)
                 .environmentObject(quota)
                 .environmentObject(system)
                 .onAppear {
                     sessions.start()
+                    claudeSessions.start()
                     quota.start()
                     system.start()
                 }

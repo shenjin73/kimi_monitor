@@ -1,18 +1,83 @@
 import SwiftUI
 
-struct SessionsSection: View {
+// MARK: - Kimi sessions
+
+struct KimiSessionsSection: View {
     @EnvironmentObject var monitor: SessionMonitor
 
-    // Same two-column flexible grid as the quota section, so tiles match
-    // the quota cards in width and height.
+    var body: some View {
+        SessionsSection(
+            title: "Kimi 会话",
+            icon: "terminal",
+            entries: monitor.entries.map { SessionEntry(from: $0) },
+            emptyHint: "没有活动会话 — 启动 Kimi CLI 会话后会显示在这里"
+        )
+    }
+}
+
+// MARK: - Claude sessions
+
+struct ClaudeSessionsSection: View {
+    @EnvironmentObject var monitor: ClaudeSessionMonitor
+
+    var body: some View {
+        SessionsSection(
+            title: "Claude 会话",
+            icon: "sparkles",
+            entries: monitor.entries.map { SessionEntry(from: $0) },
+            emptyHint: "没有活动会话 — 安装 Claude CLI hook 后会显示在这里"
+        )
+    }
+}
+
+// MARK: - Shared model
+
+struct SessionEntry: Identifiable {
+    let id: String
+    let effective: EffectiveStatus
+    let sessionId: String
+    let sessionTitle: String?
+    let cwd: String?
+    let updatedAt: Double?
+    let event: String?
+
+    init(from e: SessionMonitor.Entry) {
+        id = e.state.session_id
+        effective = e.effective
+        sessionId = e.state.session_id
+        sessionTitle = e.state.session_title
+        cwd = e.state.cwd
+        updatedAt = e.state.updated_at
+        event = e.state.event
+    }
+
+    init(from e: ClaudeSessionMonitor.Entry) {
+        id = e.state.session_id
+        effective = e.effective
+        sessionId = e.state.session_id
+        sessionTitle = e.state.session_title
+        cwd = e.state.cwd
+        updatedAt = e.state.updated_at
+        event = e.state.event
+    }
+}
+
+// MARK: - Generic section
+
+private struct SessionsSection: View {
+    let title: String
+    let icon: String
+    let entries: [SessionEntry]
+    let emptyHint: String
+
     private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionHeader(title: "Kimi 会话", icon: "terminal")
+            SectionHeader(title: title, icon: icon)
 
-            if monitor.entries.isEmpty {
-                Text("没有活动会话 — 启动 Kimi CLI 会话后会显示在这里")
+            if entries.isEmpty {
+                Text(emptyHint)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -20,7 +85,7 @@ struct SessionsSection: View {
                     .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
             } else {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                    ForEach(monitor.entries) { entry in
+                    ForEach(entries) { entry in
                         SessionTile(entry: entry)
                     }
                 }
@@ -30,8 +95,10 @@ struct SessionsSection: View {
     }
 }
 
+// MARK: - Tile
+
 private struct SessionTile: View {
-    let entry: SessionMonitor.Entry
+    let entry: SessionEntry
     @State private var breathing = false
 
     private var statusColor: Color {
@@ -43,7 +110,6 @@ private struct SessionTile: View {
         }
     }
 
-    /// 等待用户反馈时呼吸灯效果。
     private var isBreathing: Bool { entry.effective == .waitingUser }
 
     var body: some View {
@@ -61,7 +127,7 @@ private struct SessionTile: View {
                     value: breathing
                 )
                 .onAppear { breathing = isBreathing }
-                .onChange(of: isBreathing) { breathing = $0 }
+                .onChange(of: isBreathing) { _, new in breathing = new }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(entry.effective.label)
@@ -72,7 +138,7 @@ private struct SessionTile: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.tertiary)
 
-                Text(cwd)
+                Text(cwdText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -86,26 +152,26 @@ private struct SessionTile: View {
         .frame(maxWidth: .infinity)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
         .contextMenu {
-            if let cwd = entry.state.cwd {
+            if let cwd = entry.cwd {
                 Button("在 Finder 中显示") {
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: cwd)
                 }
             }
             Button("复制 Session ID") {
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(entry.state.session_id, forType: .string)
+                NSPasteboard.general.setString(entry.sessionId, forType: .string)
             }
         }
-        .help(entry.state.session_title ?? entry.state.session_id)
+        .help(entry.sessionTitle ?? entry.sessionId)
     }
 
-    private var cwd: String {
-        let path = entry.state.cwd ?? ""
+    private var cwdText: String {
+        let path = entry.cwd ?? ""
         return path.isEmpty ? "-" : abbreviateHome(path)
     }
 
     private var updatedText: String {
-        guard let ts = entry.state.updated_at else { return "-" }
+        guard let ts = entry.updatedAt else { return "-" }
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm:ss"
         return fmt.string(from: Date(timeIntervalSince1970: ts))
