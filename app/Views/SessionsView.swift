@@ -9,8 +9,7 @@ struct KimiSessionsSection: View {
         SessionsSection(
             title: "Kimi 会话",
             icon: "terminal",
-            entries: monitor.entries.map { SessionEntry(from: $0) },
-            emptyHint: "没有活动会话 — 启动 Kimi CLI 会话后会显示在这里"
+            entries: monitor.entries.map { SessionEntry(from: $0) }
         )
     }
 }
@@ -24,8 +23,7 @@ struct ClaudeSessionsSection: View {
         SessionsSection(
             title: "Claude 会话",
             icon: "sparkles",
-            entries: monitor.entries.map { SessionEntry(from: $0) },
-            emptyHint: "没有活动会话 — 安装 Claude CLI hook 后会显示在这里"
+            entries: monitor.entries.map { SessionEntry(from: $0) }
         )
     }
 }
@@ -68,30 +66,25 @@ private struct SessionsSection: View {
     let title: String
     let icon: String
     let entries: [SessionEntry]
-    let emptyHint: String
 
     private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader(title: title, icon: icon)
+        // Hide the whole section (header included) when there is no active
+        // session; it reappears automatically once a session is detected,
+        // since `entries` is @Published upstream.
+        if !entries.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionHeader(title: title, icon: icon)
 
-            if entries.isEmpty {
-                Text(emptyHint)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 20)
-                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
-            } else {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                     ForEach(entries) { entry in
                         SessionTile(entry: entry)
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
