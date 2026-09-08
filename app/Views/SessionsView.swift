@@ -26,7 +26,7 @@ struct ClaudeSessionsSection: View {
             VStack(alignment: .leading, spacing: 8) {
                 SectionHeader(title: "Claude 会话", icon: "sparkles")
 
-                let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
+                let columns = Array(repeating: GridItem(.flexible(), spacing: 14), count: 4)
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                     ForEach(entries) { entry in
                         SessionTile(entry: entry, tokenTally: tokens)
@@ -77,7 +77,8 @@ private struct SessionsSection: View {
     let icon: String
     let entries: [SessionEntry]
 
-    private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
+    // Max 4 tiles per row, flexible width.
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 14), count: 4)
 
     var body: some View {
         if !entries.isEmpty {
