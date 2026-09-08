@@ -113,7 +113,7 @@ private struct GaugeCard: View {
     var body: some View {
         VStack(spacing: 0) {
             Text(title)
-                .font(.subheadline.weight(.medium))
+                .font(.subheadline.weight(.bold))
                 .foregroundStyle(.secondary)
 
             GeometryReader { geo in
@@ -139,9 +139,9 @@ private struct GaugeCard: View {
                 .frame(width: geo.size.width, height: geo.size.height)
             }
             .frame(height: 150)
-            .padding(.top, 10)
+            .padding(.top, 20)
 
-            VStack(spacing: 4) {
+            VStack(spacing: 2) {
                 if let processes, !processes.isEmpty {
                     ForEach(processes) { proc in
                         HStack(spacing: 6) {
@@ -160,7 +160,7 @@ private struct GaugeCard: View {
                     }
                 }
             }
-            .padding(.top, 10)
+            .padding(.top, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: 66)
         }
@@ -182,7 +182,7 @@ private struct FanTempCard: View {
     var body: some View {
         VStack(spacing: 0) {
             Text("风扇 / 温度")
-                .font(.subheadline.weight(.medium))
+                .font(.subheadline.weight(.bold))
                 .foregroundStyle(.secondary)
 
             GeometryReader { geo in
@@ -204,16 +204,17 @@ private struct FanTempCard: View {
                 .frame(width: geo.size.width, height: geo.size.height)
             }
             .frame(height: 150)
-            .padding(.top, 10)
+            .padding(.top, 20)
 
-            VStack(spacing: 4) {
+            VStack(spacing: 1) {
                 sensorRow("CPU 温度", value: temp(snapshot.cpuTempC))
                 sensorRow("GPU 温度", value: temp(snapshot.gpuTempC))
-                sensorRow("系统功耗", value: power(snapshot.systemPowerW))
+                sensorRow("系统功耗", value: power(snapshot.systemPowerW),
+                           valueColor: (snapshot.systemPowerW ?? 0) > 50 ? .red : .primary)
             }
-            .padding(.top, 10)
+            .padding(.top, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 82)
+            .frame(height: 66)
         }
         .padding(.top, 14)
         .padding(.bottom, 18)
@@ -244,7 +245,7 @@ private struct FanTempCard: View {
         v.map { String(format: "%.1f W", $0) } ?? "-"
     }
 
-    private func sensorRow(_ label: String, value: String) -> some View {
+    private func sensorRow(_ label: String, value: String, valueColor: Color = .primary) -> some View {
         HStack(spacing: 6) {
             Text(label)
                 .font(.caption2)
@@ -252,7 +253,7 @@ private struct FanTempCard: View {
             Spacer(minLength: 6)
             Text(value)
                 .font(.caption2.monospacedDigit())
-                .foregroundStyle(.primary)
+                .foregroundStyle(valueColor)
                 .fixedSize()
         }
     }
