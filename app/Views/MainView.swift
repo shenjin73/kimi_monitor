@@ -6,8 +6,7 @@ struct MainView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                KimiSessionsSection()
-                ClaudeSessionsSection()
+                SessionsSection()
                 QuotaSection()
                 SystemSection()
             }

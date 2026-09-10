@@ -2,6 +2,7 @@ import SwiftUI
 
 struct QuotaSection: View {
     @EnvironmentObject var monitor: QuotaMonitor
+    @EnvironmentObject var deepSeek: DeepSeekMonitor
 
     private var cards: [(title: String, quota: UsageResponse.Quota)] {
         guard let usage = monitor.usage else { return [] }
@@ -14,18 +15,37 @@ struct QuotaSection: View {
         return result
     }
 
+    /// Section-level "updated at": the most recent of the two monitors.
+    private var lastUpdated: Date? {
+        [monitor.lastUpdated, deepSeek.lastUpdated].compactMap { $0 }.max()
+    }
+
+    /// One row of tiles: the Kimi quota cards followed by the DeepSeek account
+    /// tile, all sharing the width equally (3 cards → 1/3 each). When a quota
+    /// card is missing — first load, or the fetch failed — the DeepSeek tile
+    /// gets the whole row instead of being squeezed.
+    private var columns: [GridItem] {
+        let count = min(max(cards.count + 1, 1), 3)
+        return Array(repeating: GridItem(.flexible(), spacing: 14), count: count)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 SectionHeader(title: "套餐用量", icon: "gauge.with.dots.needle.67percent")
                 Spacer()
-                if let updated = monitor.lastUpdated {
+                if let updated = lastUpdated {
                     Text("更新于 \(updated.formatted(date: .omitted, time: .standard))")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
                 Button {
-                    Task { await monitor.refresh() }
+                    Task {
+                        // One button refreshes every number in this section.
+                        async let quota: Void = monitor.refresh()
+                        async let deepseek: Void = deepSeek.refresh()
+                        _ = await (quota, deepseek)
+                    }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -33,28 +53,38 @@ struct QuotaSection: View {
                 .help("立即刷新")
             }
 
-            if !cards.isEmpty {
-                LazyVGrid(columns: cards.map { _ in GridItem(.flexible(), spacing: 14) }, spacing: 14) {
+            LazyVGrid(columns: columns, spacing: 14) {
+                if cards.isEmpty {
+                    quotaPlaceholder
+                } else {
                     ForEach(Array(cards.enumerated()), id: \.offset) { _, card in
                         QuotaCard(title: card.title, quota: card.quota)
                     }
                 }
-                if let error = monitor.lastError {
-                    Label("上次刷新失败: \(error)", systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-            } else if let error = monitor.lastError {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 20)
-                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
-            } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, minHeight: 80)
+                DeepSeekUsageCard()
             }
+
+            if let error = monitor.lastError, !cards.isEmpty {
+                Label("上次刷新失败: \(error)", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    /// Stands in for the quota cards while they are loading or unavailable.
+    @ViewBuilder
+    private var quotaPlaceholder: some View {
+        if let error = monitor.lastError {
+            Label(error, systemImage: "exclamationmark.triangle")
+                .font(.callout)
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, minHeight: 80)
+                .padding(.horizontal, 12)
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+        } else {
+            ProgressView()
+                .frame(maxWidth: .infinity, minHeight: 80)
         }
     }
 }
@@ -81,6 +111,10 @@ private struct QuotaCard: View {
                     .foregroundStyle(color)
             }
             Bar3D(value: fraction, color: color)
+            // The tile stretches to the row height set by the taller DeepSeek
+            // tile, so the countdown is pinned to the bottom instead of
+            // leaving a gap under it.
+            Spacer(minLength: 0)
             HStack {
                 Spacer()
                 if let reset = parseISO8601(quota.resetTime) {
@@ -91,6 +125,9 @@ private struct QuotaCard: View {
             }
         }
         .padding(12)
+        // Fill the grid row so all tiles in it share one height and their
+        // backgrounds line up, even though the DeepSeek tile is taller.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
     }
 }

@@ -17,19 +17,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshStatusItem() {
-        let monitor = SessionMonitor.shared
         guard let button = statusItem.button else { return }
-        if monitor.entries.isEmpty {
-            button.title = "◦ Kimi"
+        let entries = allEntries()
+        if entries.isEmpty {
+            button.title = "◦ 无会话"
         } else {
-            let dot = monitor.aggregate?.dot ?? "⚪"
-            button.title = "\(dot) \(monitor.entries.count)"
+            let dot = entries.map(\.effective).min(by: { $0.rank < $1.rank })?.dot ?? "⚪"
+            button.title = "\(dot) \(entries.count)"
         }
-        button.toolTip = "Kimi Monitor: \(monitor.entries.count) 个会话"
-        rebuildMenu(monitor.entries)
+        button.toolTip = "Kimi Monitor: \(entries.count) 个工作中的会话（Kimi / Claude / DSH）"
+        rebuildMenu(entries)
     }
 
-    private func rebuildMenu(_ entries: [SessionMonitor.Entry]) {
+    /// Only sessions that are working or waiting for the user — the same rule
+    /// the dashboard uses. Idle and offline sessions never reach the menu.
+    private func allEntries() -> [MenuEntry] {
+        func keep(_ status: EffectiveStatus) -> Bool {
+            status == .working || status == .waitingUser
+        }
+        var entries: [MenuEntry] = SessionMonitor.shared.entries
+            .filter { keep($0.effective) }
+            .map { MenuEntry(kind: .kimi, effective: $0.effective,
+                             title: $0.state.session_title, fallback: $0.state.session_id) }
+        entries += ClaudeSessionMonitor.shared.entries
+            .filter { keep($0.effective) }
+            .map { MenuEntry(kind: .claude, effective: $0.effective,
+                             title: $0.state.session_title, fallback: $0.state.session_id) }
+        entries += DshSessionMonitor.shared.entries
+            .filter { keep($0.effective) }
+            .map { MenuEntry(kind: .dsh, effective: $0.effective,
+                             title: $0.title, fallback: $0.sessionId) }
+        return entries.sorted {
+            if $0.effective.rank != $1.effective.rank { return $0.effective.rank < $1.effective.rank }
+            return $0.displayTitle < $1.displayTitle
+        }
+    }
+
+    private func rebuildMenu(_ entries: [MenuEntry]) {
         let menu = NSMenu()
 
         let open = NSMenuItem(title: "打开主窗口", action: #selector(showMainWindow), keyEquivalent: "")
@@ -38,15 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         if entries.isEmpty {
-            let empty = NSMenuItem(title: "没有活动会话", action: nil, keyEquivalent: "")
+            let empty = NSMenuItem(title: "没有工作中的会话", action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
         } else {
             for entry in entries {
-                let title = entry.state.session_title?.isEmpty == false
-                    ? entry.state.session_title! : entry.state.session_id
                 let item = NSMenuItem(
-                    title: "\(entry.effective.dot) \(title) — \(entry.effective.label)",
+                    title: "\(entry.effective.dot) \(entry.kind.label) · \(entry.displayTitle) — \(entry.effective.label)",
                     action: nil, keyEquivalent: "")
                 item.isEnabled = false
                 menu.addItem(item)
@@ -78,4 +100,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension Notification.Name {
     static let openMainWindow = Notification.Name("kimi_monitor.openMainWindow")
+}
+
+/// One row of the menu-bar dropdown, normalized across session kinds.
+private struct MenuEntry {
+    let kind: SessionKind
+    let effective: EffectiveStatus
+    let title: String?
+    let fallback: String
+
+    var displayTitle: String {
+        guard let title, !title.isEmpty else { return fallback }
+        return title
+    }
 }
