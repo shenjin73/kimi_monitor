@@ -1,5 +1,36 @@
 import Foundation
 
+/// Locates a `zstd` executable.
+///
+/// dsh stores its session logs as zstd, and neither Foundation nor Apple's
+/// Compression framework decodes that, so every reader of those logs shells out
+/// to this binary. Absolute paths are checked before `$PATH` because an app
+/// launched from Finder — or as a login item — inherits launchd's minimal PATH,
+/// which rarely contains Homebrew or conda.
+enum ZstdBinary {
+    private static let candidates = [
+        "/opt/homebrew/bin/zstd",
+        "/usr/local/bin/zstd",
+        "/opt/miniconda3/bin/zstd",
+        "/opt/anaconda3/bin/zstd",
+        "/usr/bin/zstd",
+    ]
+
+    static let path: String? = {
+        let fm = FileManager.default
+        for candidate in candidates where fm.isExecutableFile(atPath: candidate) { return candidate }
+        let searchPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        for directory in searchPath.split(separator: ":") {
+            let candidate = String(directory) + "/zstd"
+            if fm.isExecutableFile(atPath: candidate) { return candidate }
+        }
+        return nil
+    }()
+
+    /// False when no `zstd` exists, so the UI can explain itself.
+    static var isAvailable: Bool { path != nil }
+}
+
 /// Totals dsh's provider-reported token usage for one local day, by replaying
 /// the session logs.
 ///
@@ -16,40 +47,17 @@ final class DshTokenLog {
 
     private let sessionsRoot = NSHomeDirectory() + "/.dsh/sessions"
 
-    /// Checked before `$PATH`: an app launched from Finder, or as a login item,
-    /// inherits launchd's minimal PATH, which rarely contains Homebrew or conda.
-    private let zstdCandidates = [
-        "/opt/homebrew/bin/zstd",
-        "/usr/local/bin/zstd",
-        "/opt/miniconda3/bin/zstd",
-        "/opt/anaconda3/bin/zstd",
-        "/usr/bin/zstd",
-    ]
-
     private init() {}
 
-    // MARK: - Availability
-
-    private(set) lazy var zstdPath: String? = {
-        let fm = FileManager.default
-        for path in zstdCandidates where fm.isExecutableFile(atPath: path) { return path }
-        let searchPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
-        for directory in searchPath.split(separator: ":") {
-            let path = String(directory) + "/zstd"
-            if fm.isExecutableFile(atPath: path) { return path }
-        }
-        return nil
-    }()
-
     /// False when no `zstd` executable exists, so the UI can explain itself.
-    var isSupported: Bool { zstdPath != nil }
+    var isSupported: Bool { ZstdBinary.isAvailable }
 
     // MARK: - Scanning
 
     /// Provider-reported tokens recorded on the local calendar day containing
     /// `day`, summed over every dsh session. `nil` when the logs cannot be read.
     func tokens(on day: Date, calendar: Calendar = .current) -> Int? {
-        guard let zstd = zstdPath else { return nil }
+        guard let zstd = ZstdBinary.path else { return nil }
         let files = logFiles()
         guard !files.isEmpty else { return nil }
 

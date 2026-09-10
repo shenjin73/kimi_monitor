@@ -314,14 +314,16 @@ struct UsageResponse: Codable {
         let window: Window?
         let detail: Quota?
 
+        /// Tile title for this window, named after the tool it belongs to so
+        /// the 套餐用量 row reads unambiguously next to the DeepSeek tile.
         var windowLabel: String {
-            guard let d = window?.duration else { return "限额" }
+            guard let d = window?.duration else { return "Kimi限额" }
             switch window?.timeUnit {
             case "TIME_UNIT_MINUTE":
-                return d % 60 == 0 ? "\(d / 60) 小时窗口" : "\(d) 分钟窗口"
-            case "TIME_UNIT_HOUR": return "\(d) 小时窗口"
-            case "TIME_UNIT_DAY": return "\(d) 天窗口"
-            default: return "\(d) 单位窗口"
+                return "Kimi" + (d % 60 == 0 ? "\(d / 60)小时窗口" : "\(d)分钟窗口")
+            case "TIME_UNIT_HOUR": return "Kimi\(d)小时窗口"
+            case "TIME_UNIT_DAY": return "Kimi\(d)天窗口"
+            default: return "Kimi\(d)单位窗口"
             }
         }
     }

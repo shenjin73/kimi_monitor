@@ -36,9 +36,13 @@ DSH 会话的状态判读（`DshSessionMonitor`）合并两个来源，哪个能
 | --- | --- | --- |
 | hook 写了 `waiting_user` 且没有正在生成的 step | 🟠 等待用户 | `~/.dsh/status/*.json` |
 | `sessionStats.openStep != null` | 🔵 工作中（模型正在生成） | 投影缓存 |
-| `sessionStats.pendingCalls` 非空且已持续 >12s | 🟠 等待用户（审批 / 提问阻塞） | 投影缓存 |
-| `pendingCalls` 非空但刚开始 | 🔵 工作中（工具执行中） | 投影缓存 |
+| `sessionStats.pendingCalls` 非空 | 🔵 工作中（工具执行中） | 投影缓存 |
+| `pendingCalls` 非空**且会话日志末尾有未应答的 `approval/asked`** | 🟠 等待用户（审批弹窗） | 会话日志 |
 | 其余 | 🟢 空闲 | 两者 |
+
+> **"工具 pending 多久"不能用来猜审批。** dsh 没有任何事件或投影行表示"正在等审批"，而桥接的 `PreToolUse` 在审批询问**之前**触发，所以审批阻塞和慢工具在 hook 和投影里完全同形（hook 说 `working` + 一个 pending call + `openStep` 为空）。曾经用「pending 超过 12 秒 = 在等审批」去猜，结果**任何超过 12 秒的工具**（编译、跑测试、几分钟的 sub-agent）都被误判成"等待用户"。
+>
+> 现在审批改由**会话日志**判断：dsh 把 `approval/asked{id}` / `approval/decided{id}` 写进 `~/.dsh/sessions/**/session.v3.jsonl.zstd`，而弹窗挂着时日志不再追加任何东西，所以"没配对的 asked"一定落在最后几条记录里。日志虽是 zstd，但 dsh 每次追加都 flush 成一个**独立帧**（实测 858KB = 401 帧），因此只读末尾 64KB、从帧边界（zstd magic）开始解压就够（~6ms），结论再按 (size, mtime) 缓存——弹窗挂着期间日志不变，等于零开销。其余工具执行期间一律「工作中」；`ask_user_question` 仍走 hook 的 `waiting_user`。找不到 `zstd` 命令时探测自动降级为"不亮红灯"，不会误报。
 
 > 投影缓存（`~/.dsh/storages/session_projcache/sessions/*.json`）由 dsh 自己在会话创建、`turn/end`、会话释放以及最多 5s 一次的节流点写入，**零配置即可用**；hook 只是让 `ask_user_question` 这类"等待用户"提前几秒精确落地。
 >
@@ -57,7 +61,7 @@ DeepSeek 的数字出现在两个地方：**DSH 会话瓦片右侧**一行 `余�
 
 ### 套餐用量
 
-- **5 小时滚动窗口** 和 **每周配额** 各一张卡片：大号百分比（>70% 橙、>90% 红）+ 18pt 进度条 + 重置倒计时
+- **Kimi5小时窗口** 和 **Kimi每周配额** 各一张卡片：大号百分比（>70% 橙、>90% 红）+ 18pt 进度条 + 重置倒计时
 - **DeepSeek 账户瓦片**：**和两张配额卡片排在同一行，各占 1/3 宽度**（配额接口失败时它独占整行）。瓦片上只显示 **余额（大号数字）+ 累计token使用量 + 今日token使用量**，平台来源时再多一行请求次数。因为只有 1/3 宽，数字是**上下排列的 label/value 行**，不是横向铺开；三张卡片底边对齐（配额卡的重置倒计时、DeepSeek 的 token 按钮都贴底）
 - **"今日"两种来源都拿得到**：平台模式直接读开放平台的当日口径（GMT+8）；**本机模式回放 dsh 会话日志算**——投影缓存只有会话生命周期的 `totals` 和最后一个 step 的 `last`，没有按天分桶，但 `~/.dsh/sessions/<cwd>/<id>/session.v3.jsonl.zstd` 里有**每条 assistant 消息的时间戳和完整 usage**，按本地时区归日求和即可（全部会话合计）。日志是 zstd 压缩、系统和 Foundation 都不带 zstd，所以走一个 `zstd` 命令解压（homebrew / conda 常见路径都试，找不到就显示 `今日token使用量 —` 并在 tooltip 说明）
 - 右上角手动刷新按钮 + 最后更新时间：**一次点击同时刷新配额和 DeepSeek 两个数据源**，时间取两者较新的
@@ -141,6 +145,7 @@ app/Monitors/
   ClaudeTokenMonitor.swift        # 扫描 ~/.claude/projects 统计 token（今日 / 近 7 天）
   DeepSeekMonitor.swift           # DeepSeek 余额 + 开放平台累计消费/token（可选 userToken）+ 本机回退
   DshTokenLog.swift               # 回放 zstd 会话日志，按本地日期汇总 token（今日用量）
+  DshApprovalLog.swift            # 读会话日志尾部的 approval/asked 配对，判定审批弹窗
   QuotaMonitor.swift              # OAuth token 刷新 + /usages 拉取
   SystemMonitor.swift             # CPU / GPU / 内存 / SMC 传感器 / 系统功耗采样
   FrequencyReader.swift           # IOReport 时钟频率（CPU/GPU 性能状态驻留加权）

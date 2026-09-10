@@ -10,7 +10,7 @@ struct QuotaSection: View {
             entry.detail.map { (entry.windowLabel, $0) }
         }
         if let weekly = usage.usage {
-            result.append(("每周配额", weekly))
+            result.append(("Kimi每周配额", weekly))
         }
         return result
     }

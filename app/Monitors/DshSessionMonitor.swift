@@ -47,9 +47,6 @@ final class DshSessionMonitor: ObservableObject {
         projectionDir = home + "/.dsh/storages/session_projcache/sessions"
     }
 
-    /// A tool call pending this long is assumed to be blocked on the human
-    /// (approval prompt / question) rather than on the tool itself.
-    let waitingToolAfter: TimeInterval = 12
     /// Nothing observed for this long *and* no lock held → dead; state removed.
     let staleAfter: TimeInterval = 150
     /// An idle session stays visible this long after its last real activity, so
@@ -96,15 +93,15 @@ final class DshSessionMonitor: ObservableObject {
             projections[String(name.dropLast(5))] = (projection, mtime)
         }
 
-        // ── Liveness: session id → lock path, then probe the flock ──
-        let locks = lockPaths(fm: fm)
+        // ── Liveness: session id → lock/log paths, then probe the flock ──
+        let files = sessionFiles(fm: fm)
 
         var result: [Entry] = []
         for id in Set(hooks.keys).union(projections.keys) {
             let hook = hooks[id]
             let projection = projections[id]?.projection
             let projectionMtime = projections[id]?.mtime
-            let lockPath = locks[id]
+            let lockPath = files[id]?.lock
 
             let live = lockPath.map(lockHeld) ?? false
             let hookFresh = hook.map { now - $0.mtime < staleAfter } ?? false
@@ -117,7 +114,19 @@ final class DshSessionMonitor: ObservableObject {
                 continue
             }
 
-            let (status, stamp) = effective(hook: hook?.state, projection: projection, now: now)
+            // A tool call in flight is work — unless dsh is genuinely blocked on
+            // an approval prompt, which only the session log records. The lookup
+            // is cached against the log's size+mtime, so it costs nothing while
+            // the prompt sits there. (An `ask_user_question` arrives through the
+            // hook instead and is handled inside `effective`.)
+            let logPath = files[id]?.log ?? ""
+            let approvalPending = projection?.stats?.openStep == nil
+                && !(projection?.stats?.pendingCalls ?? [:]).isEmpty
+                && !logPath.isEmpty
+                && DshApprovalLog.shared.hasPendingApproval(logPath: logPath)
+
+            let (status, stamp) = effective(hook: hook?.state, projection: projection,
+                                            approvalPending: approvalPending, now: now)
 
             // An idle session is shown for `idleRetention` after its last real
             // activity, then dropped. The activity clock must not come from the
@@ -176,6 +185,7 @@ final class DshSessionMonitor: ObservableObject {
     /// a throttled checkpoint lands.
     private func effective(hook: SessionState?,
                            projection: DshProjection?,
+                           approvalPending: Bool,
                            now: Double) -> (EffectiveStatus, Double?) {
         let hookStatus = hook?.status.flatMap(EffectiveStatus.init(rawValue:))
         let hookStamp = hook.map { max($0.updated_at ?? 0, $0.heartbeat_at ?? 0) }
@@ -189,13 +199,22 @@ final class DshSessionMonitor: ObservableObject {
         if let open = projection?.stats?.openStep {
             return (.working, open.startTime.map { $0 / 1000 } ?? hookStamp)
         }
-        // 3. A tool call is in flight; a long one is almost always an approval
-        //    prompt or a question, both of which block on the user.
+        // 3. A tool call in flight — that is work, however long it takes.
+        //
+        //    Do *not* guess "waiting for the user" from the elapsed time: dsh
+        //    gives no signal that separates an approval prompt from a slow
+        //    tool. The bridge fires PreToolUse before the approval ask, so both
+        //    leave the hook saying "working" and the checkpoint showing one
+        //    pending call with no open step. A build, a test run or a subagent
+        //    spends minutes in exactly that state, so the old "pending > 12 s
+        //    means blocked on the human" rule mislabelled every slow tool. The
+        //    one genuine exception is an approval prompt, which the session log
+        //    does record — `approvalPending` is that answer, read from the log
+        //    by `DshApprovalLog`, and a real question still arrives through
+        //    rule 1 with a `waiting_user` hook status.
         if let pending = projection?.stats?.pendingCalls, !pending.isEmpty {
             let oldest = pending.values.min() ?? 0
-            let startedAt = oldest / 1000
-            let status: EffectiveStatus = now - startedAt >= waitingToolAfter ? .waitingUser : .working
-            return (status, startedAt)
+            return (approvalPending ? .waitingUser : .working, oldest / 1000)
         }
         // 4. Fall back to the last recorded hook edge.
         if hookFresh, let hookStatus { return (hookStatus, hookStamp) }
@@ -214,16 +233,24 @@ final class DshSessionMonitor: ObservableObject {
         }
     }
 
-    /// dsh lays sessions out as ~/.dsh/sessions/<enc cwd>/<session id>/.
-    private func lockPaths(fm: FileManager) -> [String: String] {
+    /// dsh lays sessions out as ~/.dsh/sessions/<enc cwd>/<session id>/, with the
+    /// kernel lock and the session log side by side.
+    private func sessionFiles(fm: FileManager) -> [String: (lock: String, log: String)] {
         guard let cwds = try? fm.contentsOfDirectory(atPath: sessionsRoot) else { return [:] }
-        var result: [String: String] = [:]
+        var result: [String: (lock: String, log: String)] = [:]
         for cwd in cwds {
             let dir = sessionsRoot + "/" + cwd
             guard let sessions = try? fm.contentsOfDirectory(atPath: dir) else { continue }
             for session in sessions {
-                let path = dir + "/" + session + "/session.lock"
-                if fm.fileExists(atPath: path) { result[session] = path }
+                let sessionDir = dir + "/" + session
+                let lock = sessionDir + "/session.lock"
+                guard fm.fileExists(atPath: lock) else { continue }
+                // v3 log when present, else the legacy one.
+                let modern = sessionDir + "/session.v3.jsonl.zstd"
+                let legacy = sessionDir + "/session.jsonl.zstd"
+                let log = fm.fileExists(atPath: modern) ? modern
+                    : (fm.fileExists(atPath: legacy) ? legacy : "")
+                result[session] = (lock, log)
             }
         }
         return result
