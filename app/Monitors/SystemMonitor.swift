@@ -5,6 +5,12 @@ import IOKit
 final class SystemMonitor: ObservableObject {
     static let shared = SystemMonitor()
 
+    /// macOS reports memory in binary units but labels them "GB" — About This
+    /// Mac calls a 137,438,953,472-byte machine "128 GB", not "137 GB" — so
+    /// dividing bytes by 1e9 would overstate every figure by ~7.4%.
+    private static let bytesPerGiB = 1024.0 * 1024 * 1024
+    private static let bytesPerMiB = 1024.0 * 1024
+
     /// A top-N process row shown inside a gauge tile.
     struct ProcessUsage: Identifiable {
         var id: Int { pid }
@@ -155,9 +161,9 @@ final class SystemMonitor: ObservableObject {
     private func topMemoryProcesses() -> [ProcessUsage] {
         let rows = topMemRows()
         return rows.prefix(3).map { pid, name, bytes in
-            let gb = Double(bytes) / 1e9
-            let text = gb >= 1 ? String(format: "%.1f GB", gb)
-                               : String(format: "%.0f MB", gb * 1000)
+            let gib = Double(bytes) / Self.bytesPerGiB
+            let text = gib >= 1 ? String(format: "%.1f GB", gib)
+                                : String(format: "%.0f MB", Double(bytes) / Self.bytesPerMiB)
             return ProcessUsage(pid: pid, name: friendlyName(name), value: text)
         }
     }
@@ -449,7 +455,8 @@ final class SystemMonitor: ObservableObject {
         let usedPages = UInt64(stats.active_count) + UInt64(stats.wire_count)
             + UInt64(stats.compressor_page_count)
         let totalBytes = ProcessInfo.processInfo.physicalMemory
-        return (Double(usedPages * pageSize) / 1e9, Double(totalBytes) / 1e9)
+        return (Double(usedPages * pageSize) / Self.bytesPerGiB,
+                Double(totalBytes) / Self.bytesPerGiB)
     }
 
     // MARK: - GPU (IOAccelerator performance statistics, no sudo needed)
